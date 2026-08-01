@@ -92,7 +92,9 @@ jobs:
       # ---------------------------------------------------------------- 3
       - name: 📌 Ghim SHA upstream vào cây
         run: |
-          rm -rf upstream/.git
+          # .github của Odoo KHÔNG được mang vào repo mình: workflow của họ
+          # sẽ chạy trên PR/push trong repo mình -> nhiễu + tốn phút Actions.
+          rm -rf upstream/.git upstream/.github
           cat > upstream/CORE_PIN.txt <<EOF
           upstream_repo   = https://github.com/odoo/odoo
           upstream_branch = ${{ matrix.branch }}
@@ -109,20 +111,24 @@ jobs:
         id: commit
         run: |
           BR="${{ matrix.branch }}-upstream"
-          git clone --branch "$BR" --single-branch \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            mirror 2>/dev/null || {
-              echo "Nhánh $BR chưa có → tạo mới (lần đầu)"
-              git clone --no-checkout \
-                "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" mirror
-              git -C mirror checkout --orphan "$BR"
-              git -C mirror rm -rfq --cached . 2>/dev/null || true
-            }
+          URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
 
-          # --delete: cây mirror phải khớp HỆT upstream đã lọc.
-          # --exclude .git  : không đụng history.
-          # --exclude .github: phòng khi lỡ có workflow nằm trên nhánh này.
-          rsync -a --delete --exclude=.git --exclude=.github upstream/ mirror/
+          # Nhánh đã có -> clone để GIỮ history. Chưa có -> repo rỗng hoàn toàn.
+          # KHÔNG dùng `clone --no-checkout` + `checkout --orphan`: --orphan vẫn
+          # bung nội dung nhánh mặc định ra worktree, làm lẫn file của repo mình
+          # sang nhánh mirror.
+          if git ls-remote --exit-code --heads "$URL" "$BR" >/dev/null 2>&1; then
+            git clone --branch "$BR" --single-branch "$URL" mirror
+          else
+            echo "Nhánh $BR chưa có → khởi tạo mới (lần đầu)"
+            mkdir mirror
+            git -C mirror init -q -b "$BR"
+            git -C mirror remote add origin "$URL"
+          fi
+
+          # --delete: cây mirror khớp HỆT upstream đã lọc, không sót gì.
+          # Chỉ chừa .git (history). Không chừa gì khác — chừa là lẫn file.
+          rsync -a --delete --exclude=.git upstream/ mirror/
 
           cd mirror
           git config user.name  "todoo-sync[bot]"
@@ -140,7 +146,10 @@ jobs:
           upstream_date: ${{ env.UPSTREAM_DATE }}
           filter: giữ vi/vi_VN .po + l10n_vn* ; đã dọn module mồ côi
           run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          git tag "sync/${{ matrix.branch }}/$(date -u +%F)-${{ github.run_number }}"
+          # Tag PHẢI annotated: `push --follow-tags` chỉ đẩy annotated tag,
+          # tag nhẹ (`git tag <tên>`) nằm lại runner rồi mất theo container.
+          git tag -a "sync/${{ matrix.branch }}/$(date -u +%F)-${{ github.run_number }}" \
+                  -m "Odoo ${{ matrix.branch }} @ ${{ env.UPSTREAM_SHA }}"
 
       # ---------------------------------------------------------------- 5
       - name: 🚀 Push (không --force)
