@@ -1,0 +1,38 @@
+{
+  "_doc": "Cau hinh loc cay Odoo core khi sync ve mirror Todoo. Sua file NAY, khong sua script.",
+  "_doc_2": "Moi thay doi o day deu doi qua PR + chay lai gate -> co vet trong Git.",
+
+  "addons_roots": ["addons", "odoo/addons"],
+
+  "keep_languages": {
+    "_doc": "Ten file .po duoc giu lai. Odoo KHONG co en.po (nguon von la tieng Anh). File .pot LUON duoc giu.",
+    "files": ["vi.po", "vi_VN.po"]
+  },
+
+  "keep_l10n": {
+    "_doc": "Module bat dau bang l10n_ duoc giu. Odoo 19: CoA chung nam TRONG module account (template_generic_coa.py), khong con module l10n_generic_coa.",
+    "modules": ["l10n_vn", "l10n_vn_edi_viettel", "l10n_vn_edi_viettel_sale"]
+  },
+
+  "prune_orphans": {
+    "_doc": "Sau khi xoa l10n_*, cac module con lai co the tro toi module da mat (vd documents_l10n_be_hr_payroll). Lap xoa cho toi khi sach.",
+    "enabled": true,
+    "max_rounds": 10,
+    "protect": ["base", "web", "account", "l10n_vn"]
+  },
+
+  "required_modules": {
+    "_doc": "Gate se DO neu thieu bat ky module nao duoi day sau khi loc. Day la luoi an toan chong 'filter cat nham'.",
+    "modules": [
+      "base", "web", "mail", "account", "sale", "purchase", "stock",
+      "hr", "project", "point_of_sale", "website", "l10n_vn"
+    ]
+  },
+
+  "min_counts": {
+    "_doc": "Nguong toi thieu chong truong hop filter cat sach ca cay ma van 'xanh'.",
+    "modules": 300,
+    "vi_po_files": 200,
+    "pot_files": 200
+  }
+}
