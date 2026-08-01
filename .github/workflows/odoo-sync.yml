@@ -3,23 +3,17 @@ name: Tự động đồng bộ và lọc Odoo
 on:
   workflow_dispatch: # Nút bấm chạy thủ công
   schedule:
-    - cron: '0 0 * * 0' # Tự động chạy vào 0h Chủ Nhật hàng tuần để cập nhật code mới
+    - cron: '0 0 * * 0' # Tự động chạy vào 0h Chủ Nhật hàng tuần
 
 jobs:
   sync-and-clean:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Khai báo các phiên bản (nhánh) bạn muốn lấy về
         branch: ['17.0', '18.0', '19.0', 'master']
       fail-fast: false
 
     steps:
-      - name: ⚙️ Thiết lập Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: 📥 Clone mã nguồn từ Odoo gốc
         run: |
           git clone --depth 1 --branch ${{ matrix.branch }} https://github.com/odoo/odoo.git target-repo
@@ -36,17 +30,26 @@ jobs:
               -delete
 
           echo "Đang xóa các module l10n thừa..."
-          # Giữ lại l10n_vn* và l10n_generic_coa (module kế toán cơ sở rất quan trọng để không bị lỗi)
           find . -type d -name "l10n_*" ! -name "l10n_vn*" ! -name "l10n_generic_coa" -exec rm -rf {} +
 
-      - name: 📤 Ghi nhận và Đẩy lên Repo cá nhân
+      - name: 📤 Khởi tạo Git mới & Đẩy lên Repo cá nhân
         working-directory: ./target-repo
         run: |
+          # Xóa lịch sử shallow clone để tránh lỗi liên kết object
+          rm -rf .git
+          
+          # Khởi tạo lại Git mới tinh cho branch này
+          git init
+          git checkout -b ${{ matrix.branch }}
+          
+          # Cấu hình user
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add và commit toàn bộ code sạch
           git add -A
-          git commit -m "Auto: Cập nhật Odoo ${{ matrix.branch }} (Đã lọc VN/EN & l10n_vn)" || echo "Không có thay đổi mới"
+          git commit -m "Auto: Odoo ${{ matrix.branch }} (Đã lọc VN/EN & l10n_vn)"
           
-          # Đặt lại remote đích trỏ về Repo hiện tại của bạn
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          
-          # Force push code sạch lên nhánh tương ứng
+          # Thêm remote và Force Push lên repo cá nhân
+          git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push -u origin ${{ matrix.branch }} --force
