@@ -194,7 +194,7 @@ class HrEmployee(models.Model):
     # employee in company
     parent_id = fields.Many2one('hr.employee', 'Manager', tracking=True, index=True,
                                 domain="['|', ('company_id', '=', False), ('company_id', 'in', allowed_company_ids)]")
-    child_ids = fields.One2many('hr.employee', 'parent_id', string='Direct subordinates')
+    child_ids = fields.One2many('hr.employee', 'parent_id', string='Direct subordinates', domain=[('active', '=', True)])
     coach_id = fields.Many2one(
         'hr.employee', 'Coach', compute='_compute_coach', store=True, readonly=False,
         domain="['|', ('company_id', '=', False), ('company_id', 'in', allowed_company_ids)]",
@@ -1683,8 +1683,7 @@ We can redirect you to the public employee list."""
 
         # Flexible and Fully Flexible Calendars
         for calendar, resources in leave_resources_per_calendar.items():
-            reference_calendar = calendar or employee.company_id.resource_calendar_id
-            leave_intervals_per_calendar[reference_calendar] = reference_calendar._leave_intervals_batch(start_dt, stop_dt, resources=resources)
+            leave_intervals_per_calendar[calendar] = calendar._leave_intervals_batch(start_dt, stop_dt, resources=resources)
 
         for employee, calendar_periods in calendar_periods_per_employee.items():
             employee_work_intervals = []
