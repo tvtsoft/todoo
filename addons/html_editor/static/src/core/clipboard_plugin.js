@@ -97,7 +97,7 @@ export const CLIPBOARD_WHITELISTS = {
         /^btn/,
         /^fa/,
     ],
-    attributes: ["class", "href", "src", "target"],
+    attributes: ["class", "href", "src", "target", "colspan", "rowspan"],
     styledTags: ["SPAN", "B", "STRONG", "I", "S", "U", "FONT", "TD"],
 };
 
@@ -699,19 +699,22 @@ export class ClipboardPlugin extends Plugin {
         const fileTransferItems = getImageFiles(dataTransfer);
         const htmlTransferItem = [...dataTransfer.items].find((item) => item.type === "text/html");
         if (image || fileTransferItems.length || htmlTransferItem) {
+            let dropRange;
             if (this.document.caretPositionFromPoint) {
-                const range = this.document.caretPositionFromPoint(ev.clientX, ev.clientY);
-                this.dependencies.delete.deleteSelection();
-                this.dependencies.selection.setSelection({
-                    anchorNode: range.offsetNode,
-                    anchorOffset: range.offset,
-                });
+                const caretPosition = this.document.caretPositionFromPoint(ev.clientX, ev.clientY);
+                if (caretPosition) {
+                    dropRange = this.document.createRange();
+                    dropRange.setStart(caretPosition.offsetNode, caretPosition.offset);
+                }
             } else if (this.document.caretRangeFromPoint) {
-                const range = this.document.caretRangeFromPoint(ev.clientX, ev.clientY);
+                dropRange = this.document.caretRangeFromPoint(ev.clientX, ev.clientY);
+            }
+
+            if (dropRange) {
                 this.dependencies.delete.deleteSelection();
                 this.dependencies.selection.setSelection({
-                    anchorNode: range.startContainer,
-                    anchorOffset: range.startOffset,
+                    anchorNode: dropRange.startContainer,
+                    anchorOffset: dropRange.startOffset,
                 });
             }
         }
