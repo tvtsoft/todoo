@@ -183,6 +183,14 @@ class AccountEdiProxyClientUser(models.Model):
         attachment.write({'res_model': 'account.move', 'res_id': move.id})
         return move
 
+    def _get_type_code(self, attachment):
+        try:
+            xml_tree = etree.fromstring(attachment.raw)
+        except etree.XMLSyntaxError:
+            xml_tree = etree.fromstring(REMOVE_EMBEDDED_DOCUMENT_BINARY_OBJECT_RE.sub(b'', attachment.raw))
+            _logger.warning("The Peppol XML file was trimmed after huge node tree error for attachment ID %s", attachment.id)
+        return xml_tree.findtext('.//{*}InvoiceTypeCode') or xml_tree.findtext('.//{*}CreditNoteTypeCode')
+
     def _peppol_get_import_journal_and_move_type(self, attachment):
         # Self-billed invoices are invoices which your customer creates on your behalf and sends you via Peppol.
         # In this case, the invoice needs to be created as an out_invoice in a sale journal.
@@ -190,35 +198,16 @@ class AccountEdiProxyClientUser(models.Model):
         journal = self.company_id.peppol_purchase_journal_id
         move_type = 'in_invoice'
         error_msg = "The Peppol XML file is invalid or empty for attachment ID %s"
-
         try:
-            xml_tree = etree.fromstring(attachment.raw)
-        except etree.XMLSyntaxError:
-            try:
-                xml_tree = etree.fromstring(REMOVE_EMBEDDED_DOCUMENT_BINARY_OBJECT_RE.sub(b'', attachment.raw))
-            except (etree.XMLSyntaxError, ValueError):
-                _logger.exception(error_msg, attachment.id)
-                return journal, move_type
-            _logger.warning("The Peppol XML file was trimmed after huge node tree error for attachment ID %s", attachment.id)
-        except ValueError:
+            type_code = self._get_type_code(attachment)
+        except (etree.XMLSyntaxError, ValueError):
             _logger.exception(error_msg, attachment.id)
             return journal, move_type
 
-        invoice_type_code = xml_tree.findtext('.//{*}InvoiceTypeCode')
-        credit_note_type_code = xml_tree.findtext('.//{*}CreditNoteTypeCode')
-        if invoice_type_code in ['389', '527'] or credit_note_type_code == '261':
-            # 329/527: Self-billing invoice; 261: Self-billing credit note
-            sale_journal_domain = [
-                *self.env['account.journal']._check_company_domain(self.company_id),
-                ('type', '=', 'sale'),
-            ]
-            journal = self.env['account.journal'].search(
-                [*sale_journal_domain, ('is_self_billing', '=', True)],
-                limit=1,
-            )
-            if not journal:
-                journal = self.env['account.journal'].search(sale_journal_domain, limit=1)
-            move_type = 'out_invoice' if invoice_type_code else 'out_refund'
+        if type_code in ['389', '527', '261']:
+            # 389/527: Self-billing invoice; 261: Self-billing credit note
+            journal = self._peppol_get_import_sale_journal(self.company_id)
+            move_type = 'out_invoice' if type_code in ['389', '527'] else 'out_refund'
         return journal, move_type
 
     def _peppol_get_duplicate_message_uuids(self, message_uuids):
@@ -313,6 +302,15 @@ class AccountEdiProxyClientUser(models.Model):
         enc_key = content["enc_key"]
         document_content = content["document"]
         return self._decrypt_data(document_content, enc_key)
+
+    def _peppol_get_import_sale_journal(self, company):
+        return self.env['account.journal'].search(
+            [
+                *self.env['account.journal']._check_company_domain(company),
+                ('type', '=', 'sale'),
+            ],
+            limit=1,
+        )
 
     def _peppol_process_new_messages(self, messages):
         self.ensure_one()
