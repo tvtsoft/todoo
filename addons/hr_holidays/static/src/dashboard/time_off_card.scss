@@ -1,0 +1,34 @@
+.o_timeoff_card {
+    min-height: 80px;
+
+    span {
+        line-height: 1;
+    }
+
+    .o_timeoff_name {
+        color: $body-color;
+        font-size: 15px;
+        margin-bottom: 3px;
+        font-weight: bolder;
+    }
+
+    .o_timeoff_duration {
+        font-size: 40px;
+        width: auto;
+        padding: auto 5px;
+        line-height: 1;
+
+        img {
+            height: 30px;
+            filter: var(--timeOffCard-icon-filter);
+        }
+    }
+
+    .o_timeoff_validity {
+        font-size: 14px;
+    }
+}
+
+.o_time_off_card_popover_warning {
+    max-width: 300px;
+}

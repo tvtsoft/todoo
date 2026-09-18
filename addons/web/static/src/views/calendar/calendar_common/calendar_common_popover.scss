@@ -1,0 +1,82 @@
+.o_cw_popover {
+    max-height: 80vh;
+    max-width: 95vw;
+    width: 448px;
+    z-index: $zindex-modal - 1;
+    font-size: $font-size-base;
+
+    .o_card {
+        min-height: 0;
+        .o_popover_body {
+            min-height: 0;
+        }
+    }
+
+    .o_field_widget:not(.o_field_properties) {
+        @include o-text-overflow(block);
+    }
+
+    .o-card-grid {
+        grid-template-columns: auto 1fr;
+    }
+
+    .fc-rtl & {
+        text-align: right;
+    }
+}
+
+// Put logic in a function so that temporary variable like $-color
+// are not assigned to the global scope and potentially mess with
+// other global variables
+@function o-build-web-calendar-colors() {
+    $-calendar-colors: ();
+    @for $i from 1 through length($o-colors-complete) {
+        $-color: nth($o-colors-complete, $i);
+        $-color-subtle: mix($o-white, $-color, 55%);
+        $-calendar-colors: append($-calendar-colors, (
+            color-subtle: $-color-subtle,
+            popover-background-color: lighten($-color-subtle, 10%),
+            popover-color:  color-contrast($-color-subtle),
+        ));
+    }
+    @return $-calendar-colors;
+}
+$o-web-calendar-colors: o-build-web-calendar-colors();
+
+
+@for $i from 1 through length($o-web-calendar-colors) {
+    .modal.o_technical_modal.o_modal_full .modal-dialog .modal-content.o_calendar_color_#{$i - 1} {
+        .modal-header {
+            background-color: map-get(nth($o-web-calendar-colors, $i), "color-subtle");
+
+            .btn {
+                color: $body-color;
+            }
+        }
+    }
+
+    .o_cw_popover.o_calendar_color_#{$i - 1} {
+        $-calendar-colors-map: nth($o-web-calendar-colors, $i);
+        .o_popover_header {
+            --#{$variable-prefix}card-border-color: #{map-get($-calendar-colors-map, "color-subtle")};
+            background-color: map-get($-calendar-colors-map, "popover-background-color");
+            color: map-get($-calendar-colors-map, "popover-color");
+        }
+    }
+}
+
+// Multi create (TODO: move)
+.o_interacting .fc-event,
+.o_interacting .fc-day,
+.o_interacting .fc-more-link {
+    cursor: inherit !important;
+}
+
+.o_multi_create_mode.o_selecting,
+.o_multi_create_mode .fc-day {
+    cursor: cell;
+}
+
+.o_grabbing { // FIXME: too generic
+    cursor: move;
+}
