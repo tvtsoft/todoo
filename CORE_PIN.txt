@@ -1,7 +1,7 @@
 upstream_repo   = https://github.com/odoo/odoo
 upstream_branch = 20.0
-upstream_sha    = 8738f2d4d99e02630999f56008eda1de2922ce73
-upstream_date   = 2026-09-17T22:47:31Z
-synced_at       = 2026-09-18T03:35:23Z
-synced_by       = Sync Odoo core → mirror (lọc VN) #13
+upstream_sha    = ba43450682ef387ca9cee932d1643c6c4c883b32
+upstream_date   = 2026-09-22T03:39:22Z
+synced_at       = 2026-09-22T06:18:21Z
+synced_by       = Sync Odoo core → mirror (lọc VN) #15
 filter          = ci/sync_filter.json
