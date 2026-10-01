@@ -478,7 +478,12 @@ class SaleOrderLine(models.Model):
             line.product_template_id = line.product_id.product_tmpl_id
 
     def _search_product_template_id(self, operator, value):
-        return [("product_id.product_tmpl_id", operator, value)]
+        if operator in Domain.NEGATIVE_OPERATORS:
+            return NotImplemented
+        domain = Domain("product_id.product_tmpl_id", operator, value)
+        if operator == 'in' and False in value:  # relation may be falsy
+            domain |= Domain('product_id', '=', False)
+        return domain
 
     @api.depends("product_id")
     def _compute_is_product_archived(self):
@@ -773,9 +778,11 @@ class SaleOrderLine(models.Model):
             ):
                 continue
 
+            manual_price = has_manual_price(line)
+
             # If the price was manually set (!= technical_price_unit), price shouldn't be reset
             # unless it was requested (pricelist change).
-            if not force_recompute and (manual_price := has_manual_price(line)):
+            if not force_recompute and manual_price:
                 continue
 
             # The price of productless lines shouldn't be reset when the pricelist changes
@@ -1556,17 +1563,13 @@ class SaleOrderLine(models.Model):
             line.untaxed_amount_to_invoice = amount_to_invoice
 
     @api.depends(
-        "discount", "price_total", "product_uom_qty", "qty_delivered", "qty_invoiced_posted"
+        "discount", "price_total", "product_uom_qty", "qty_invoiced_posted"
     )
     def _compute_amount_to_invoice(self):
         for line in self:
             if line.product_uom_qty:
-                uom_qty_to_consider = (
-                    line.qty_delivered
-                    if line.product_id.invoice_policy == "delivery"
-                    else line.product_uom_qty
-                )
-                qty_to_invoice = uom_qty_to_consider - line.qty_invoiced_posted
+                # The ordered quantity is what the customer committed to, delivered or not.
+                qty_to_invoice = line.product_uom_qty - line.qty_invoiced_posted
                 unit_price_total = line.price_total / line.product_uom_qty
                 line.amount_to_invoice = unit_price_total * qty_to_invoice
             else:
@@ -1768,6 +1771,13 @@ class SaleOrderLine(models.Model):
             if not self.product_template_id:
                 self.product_id = False
                 self.name = ""
+
+    @api.onchange("label")
+    def _onchange_label(self):
+        """Immediately apply the label inverse to set the line name and prevent subsequent onchanges
+        from resetting it.
+        """
+        self._inverse_label()
 
     # === CRUD METHODS ===#
 
@@ -1983,6 +1993,11 @@ class SaleOrderLine(models.Model):
             return self._get_discounted_price()
 
         return super()._get_catalog_unit_price(parent_record, **kwargs)
+
+    def _get_product_catalog_lines_data(self, parent_record, **kwargs):
+        lines_data = super()._get_product_catalog_lines_data(parent_record, **kwargs)
+        lines_data["readOnly"] |= bool(self.combo_item_id)
+        return lines_data
 
     def _can_be_unlinked_from_catalog(self):
         return super()._can_be_unlinked_from_catalog() and self.state in {"draft", "sent"}

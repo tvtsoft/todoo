@@ -2594,7 +2594,9 @@ class AccountMoveLine(models.Model):
             other_aml_values=debit_values,
         )
 
-        if debit_currency != company_currency \
+        if self.env.context.get('no_exchange_difference'):
+            recon_currency = company_currency
+        elif debit_currency != company_currency \
             and debit_currency in debit_available_residual_amounts \
             and debit_currency in credit_available_residual_amounts:
             recon_currency = debit_currency
@@ -3470,10 +3472,8 @@ class AccountMoveLine(models.Model):
         return self._reconcile_plan([self])
 
     def remove_move_reconcile(self):
-        """ Undo a reconciliation """
-        all_moves = (self + self.reconciled_lines_ids).move_id.filtered(lambda m: not m.statement_line_id)
-        all_partials = self.matched_debit_ids + self.matched_credit_ids + self.env['account.partial.reconcile'].search([('credit_move_id.move_id', 'in', all_moves.ids), ('debit_move_id.move_id', 'in', all_moves.ids)])
-        all_partials.unlink()
+        """ Undo every reconciliation involving the lines in self, whatever the counterpart is."""
+        (self.matched_debit_ids + self.matched_credit_ids).unlink()
 
     def action_unreconcile_match_entries(self):
         """ This method will do the unreconcile action in the list view of the moves """

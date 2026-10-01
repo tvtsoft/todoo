@@ -886,13 +886,16 @@ class Website(models.CachedModel):
     @api.model
     def configurator_missing_industry(self, unknown_industry):
         self._check_configurator_access()
-        self._website_api_rpc(
-            '/api/website/unknown_industry',
-            {
-                'unknown_industry': unknown_industry,
-                'lang': self.env.context.get('lang'),
-            }
-        )
+        try:
+            self._website_api_rpc(
+                '/api/website/unknown_industry',
+                {
+                    'unknown_industry': unknown_industry,
+                    'lang': self.env.context.get('lang'),
+                },
+            )
+        except RequestException as e:
+            logger.warning(e.args[0])
 
     @api.model
     def configurator_get_images(self, industry_id, theme=''):
@@ -923,7 +926,9 @@ class Website(models.CachedModel):
         skip_ai = kwargs.get('skip_ai')  # Used by design-themes tooling
         theme_name = kwargs['theme_name']
         theme = self.env['ir.module.module'].search([('name', '=', theme_name)])
-        redirect_url = theme.button_choose_theme()
+        redirect_url = theme.with_context(
+            is_dark_palette=kwargs.get('is_dark_palette'),
+        ).button_choose_theme()
 
         module = self.env['ir.module.module'].search([
             ('name', '=', WEBSITE_TYPE_MODULES.get(kwargs.get('website_type'))),
