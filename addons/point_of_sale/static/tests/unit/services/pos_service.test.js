@@ -21,6 +21,20 @@ describe("pos_store.js", () => {
         expect(order.lines.length).toBe(3); // 2 original lines + 1 tip line
     });
 
+    test("a popstate after clickSaveOrder does not reopen the saved order", async () => {
+        const store = await setupPosEnv();
+        const order = await getFilledOrder(store);
+        store.navigate("ProductScreen", { orderUuid: order.uuid });
+
+        store.clickSaveOrder();
+        const newOrder = store.getOrder();
+        expect(newOrder.uuid).not.toBe(order.uuid);
+        expect(store.router.state.params.orderUuid).toBe(newOrder.uuid);
+        await store.router.popStateCallback();
+
+        expect(store.getOrder().uuid).toBe(newOrder.uuid);
+    });
+
     test("orderNoteFormat", async () => {
         const store = await setupPosEnv();
         const str = store.getStrNotes("string");
@@ -100,6 +114,38 @@ describe("pos_store.js", () => {
         expect([...exclusions.get(5)]).toEqual([6]);
         expect([...exclusions.get(6)]).toEqual([5]);
         expect(exclusions.has(9999)).toBe(false);
+    });
+
+    test("sendOrderInPreparation marks changes as sent when printed on retry", async () => {
+        const store = await setupPosEnv();
+        const order = await getFilledOrder(store);
+        const printer = store.unwatched.printers[0];
+        let printedCount = 0;
+        printer.printReceipt = async () => {
+            printedCount++;
+            if (printedCount === 1) {
+                return { successful: false, message: { body: "The printer is not reachable." } };
+            }
+            return { successful: true };
+        };
+        let retryPopupProps;
+        patchWithCleanup(store.dialog, {
+            add: (component, props) => {
+                retryPopupProps = props;
+            },
+        });
+
+        await store.sendOrderInPreparation(order);
+        expect(retryPopupProps.message).toInclude("The printer is not reachable.");
+        expect(store.getOrderChanges(order).nbrOfChanges).toBe(5);
+
+        await retryPopupProps.retry();
+        expect(printedCount).toBe(2);
+
+        // The changes printed on retry must not be printed again with the next ones
+        expect(store.getOrderChanges(order).nbrOfChanges).toBe(0);
+        await store.sendOrderInPreparation(order);
+        expect(printedCount).toBe(2);
     });
 
     describe("syncAllOrders", () => {
@@ -600,6 +646,18 @@ describe("pos_store.js", () => {
         const deletedOrder = await store.onDeleteOrder(order);
         expect(order.uiState.displayed).toBe(false);
         expect(deletedOrder).toBe(true);
+    });
+
+    test("onDeleteOrder keeps the router state in sync with the order it switches to", async () => {
+        const store = await setupPosEnv();
+        const order = store.addNewOrder();
+        store.navigate("ProductScreen", { orderUuid: order.uuid });
+
+        await store.onDeleteOrder(order);
+
+        const newOrder = store.getOrder();
+        expect(newOrder.uuid).not.toBe(order.uuid);
+        expect(store.router.state.params.orderUuid).toBe(newOrder.uuid);
     });
 
     test("setNextOrderRefs", async () => {
