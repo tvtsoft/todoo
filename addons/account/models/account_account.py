@@ -784,10 +784,8 @@ class AccountAccount(models.Model):
         :returns: List of account ids, ordered by frequency (from most to least frequent)
         """
         account_domain = Domain('active', '=', True)
-        if move_type in self.env['account.move'].get_inbound_types(include_receipts=True):
-            account_domain &= Domain('internal_group', '=', 'income')
-        elif move_type in self.env['account.move'].get_outbound_types(include_receipts=True):
-            account_domain &= Domain('internal_group', '=', 'expense')
+        if allowed_account_types := self._get_name_search_account_types(move_type):
+            account_domain &= Domain('account_type', 'in', allowed_account_types)
 
         query = self.env['account.move.line'].with_company(company_id)._search([
             *self.env['account.move.line']._check_company_domain(company_id),
@@ -906,7 +904,9 @@ class AccountAccount(models.Model):
 
     @api.onchange('code')
     def _onchange_code(self):
-        self.env.add_to_compute(self._fields['account_type'], self)
+        to_update = self.filtered(lambda a: not a.id or not a.account_type)
+        self.env.add_to_compute(self._fields['account_type'], to_update)
+        to_update.modified(['account_type'])
 
     @api.depends_context('company', 'formatted_display_name', 'from_bill')
     @api.depends('code')

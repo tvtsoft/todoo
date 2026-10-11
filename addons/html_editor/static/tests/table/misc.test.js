@@ -329,7 +329,7 @@ describe("normalize table structure", () => {
                     <caption>c</caption>
                     <tbody>
                         <tr>
-                            <td><div class="o-paragraph"><br></div></td>
+                            <td><p><br></p></td>
                         </tr>
                     </tbody>
                 </table>
@@ -1236,6 +1236,58 @@ describe("unmerge cells option", () => {
                     </tbody>
                 </table>
                 <p data-selection-placeholder="" style="margin: -9px 0px 8px;"><br></p>`)
+        );
+    });
+});
+
+describe("table style migration", () => {
+    test("should move tbody width/margin-left back to table", async () => {
+        const { el } = await setupEditor(
+            unformat(
+                `<table>
+                    <tbody style="width: 500px; margin-left: 50px;">
+                        <tr><td>1</td><td>2</td></tr>
+                        <tr><td>3</td><td>4</td></tr>
+                    </tbody>
+                </table>`
+            )
+        );
+        expect(getContent(el)).toBe(
+            unformat(`
+                <p data-selection-placeholder=""><br></p>
+                <table style="width: 500px; margin-left: 50px;">
+                    <tbody>
+                        <tr><td>1</td><td>2</td></tr>
+                        <tr><td>3</td><td>4</td></tr>
+                    </tbody>
+                </table>
+                <p data-selection-placeholder=""><br></p>
+            `)
+        );
+    });
+
+    test("should not move tbody width/margin-left if the table already has them", async () => {
+        const { el } = await setupEditor(
+            unformat(
+                `<table style="width: 700px;">
+                    <tbody style="width: 500px; margin-left: 50px;">
+                        <tr><td>1</td><td>2</td></tr>
+                        <tr><td>3</td><td>4</td></tr>
+                    </tbody>
+                </table>`
+            )
+        );
+        expect(getContent(el)).toBe(
+            unformat(`
+                <p data-selection-placeholder=""><br></p>
+                <table style="width: 700px;">
+                    <tbody style="width: 500px; margin-left: 50px;">
+                        <tr><td>1</td><td>2</td></tr>
+                        <tr><td>3</td><td>4</td></tr>
+                    </tbody>
+                </table>
+                <p data-selection-placeholder=""><br></p>
+            `)
         );
     });
 });

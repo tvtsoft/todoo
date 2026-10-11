@@ -18,7 +18,7 @@ from werkzeug import urls
 
 from odoo import api, fields, models, tools, _, Command
 from odoo.exceptions import RedirectWarning, UserError, ValidationError
-from odoo.tools import SQL, LazyTranslate
+from odoo.tools import SQL, LazyTranslate, frozendict
 from odoo.tools.business_data import street_split, split_vat
 from odoo.tools.date_utils import all_timezones
 from odoo.tools.translate import LazyGettext
@@ -46,15 +46,16 @@ if typing.TYPE_CHECKING:
 ADDRESS_FIELDS = ('street', 'street2', 'zip', 'city', 'state_id', 'country_id')
 
 
-EU_EXTRA_VAT_CODES = {
+EU_EXTRA_VAT_CODES = frozendict({
     'GR': 'EL',
     'GB': 'XI',
-}
-EU_EXTRA_VAT_CODES_INV = {v: k for k, v in EU_EXTRA_VAT_CODES.items()}
+})
+EU_EXTRA_VAT_CODES_INV = frozendict({v: k for k, v in EU_EXTRA_VAT_CODES.items()})
 
+PK_VAT = re.compile(r'[a-zA-Z\d]{7,8}|\d{13}')
 
 _lt = LazyTranslate(__name__)
-_ref_vat = {
+_ref_vat = frozendict({
     'al': 'ALJ91402501L',
     'ar': '20055361682',
     'at': 'ATU12345675',
@@ -101,7 +102,7 @@ _ref_vat = {
     'nz': _lt('49-098-576 or 49098576'),
     'pe': _lt('10XXXXXXXXY or 20XXXXXXXXY or 15XXXXXXXXY or 16XXXXXXXXY or 17XXXXXXXXY'),
     'ph': '123-456-789-123',
-    'pk': _lt('1234567 or 1234567-8 or 12345-1234567-8'),
+    'pk': _lt('1234567 or B594380 or 1234567-8 or 12345-1234567-8'),
     'pl': 'PL1234567883',
     'pt': 'PT123456789',
     'ro': 'RO1234567897 or 8001011234567 or 9000123456789',
@@ -119,7 +120,7 @@ _ref_vat = {
     've': 'V-12345678-1, V123456781, V-12.345.678-1',
     'xi': 'XI123456782',
     'sa': _lt('310175397400003 [Fifteen digits, first and last digits should be "3"]'),
-}
+})
 
 
 @api.model
@@ -1759,7 +1760,7 @@ class ResPartner(models.Model):
 
     def _is_geolocalized(self):
         self.ensure_one()
-        return self.partner_latitude and self.partner_longitude
+        return bool(self.partner_latitude or self.partner_longitude)
 
     def _get_preferred_legal_entity_identifier_vals(self):
         """Return a dict {'scheme': scheme, 'value': value, ...metadata} of the preferred legal entity identifier for the given partner.
@@ -2143,8 +2144,9 @@ class ResPartner(models.Model):
         return len(vat) >= 11 and len(vat) <= 17 and self._check_vat_ph_re.match(vat)
 
     def check_vat_pk(self, vat):
-        # NTN (7 digits, or 7 + 1 check digit) or CNIC (13 digits): 1234567, 1234567-8, 12345-1234567-8.
-        return bool(re.fullmatch(r'\d{7}|\d{8}|\d{13}', (vat or '').replace('-', '').replace(' ', '')))
+        # NTN (7 or 8 alphanumeric characters) or CNIC (13 digits):
+        # 1234567, B594380, 1234567-8, 12345-1234567-8.
+        return vat and bool(PK_VAT.fullmatch(vat.replace('-', '').replace(' ', '')))
 
     _check_tin1_ro_natural_persons = re.compile(r'[1-9]\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{6}')
     _check_tin2_ro_natural_persons = re.compile(r'9000\d{9}')

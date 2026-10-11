@@ -94,7 +94,7 @@ class HrEmployee(models.Model):
     def _get_hr_responsible_domain(self):
         return "[('share', '=', False), ('company_ids', 'in', company_id), ('all_group_ids', 'in', %s)]" % self.env.ref('hr.group_hr_user').id
 
-    hr_responsible_id = fields.Many2one(related='version_id.hr_responsible_id', readonly=False, inherited=True, domain=_get_hr_responsible_domain, groups="hr.group_hr_user")
+    hr_responsible_id = fields.Many2one(related='version_id.hr_responsible_id', readonly=False, inherited=True, domain=lambda self: self.env['hr.version']._get_hr_responsible_domain(), groups="hr.group_hr_user")
 
     @api.model
     def _lang_get(self):
@@ -1609,14 +1609,30 @@ class HrEmployee(models.Model):
     def _verify_barcode(self):
         for employee in self:
             if employee.barcode:
-                if not (re.match(r'^[A-Za-z0-9]+$', employee.barcode) and len(employee.barcode) <= 18):
-                    raise ValidationError(self.env._("The Badge ID must be alphanumeric without any accents and no longer than 18 characters."))
+                # [!-~] matches every printable ASCII character except the space,
+                # which is excluded because leading or trailing spaces are invisible
+                if not re.fullmatch(r'[!-~]{1,18}', employee.barcode):
+                    raise ValidationError(self.env._("The Badge ID must contain only printable ASCII characters, without spaces, and be no longer than 18 characters."))
 
     @api.onchange('user_id')
     def _onchange_user(self):
         self.update(self._sync_user(self.user_id, (bool(self.image_1920))))
         if not self.name:
             self.name = self.user_id.name
+
+    @api.onchange('work_email')
+    def _onchange_work_email_link_user(self):
+        # link the internal (light or regular) user of that email, unless it is already an employee of the company
+        emails = tools.mail.email_normalize_all(self.work_email)
+        if self.user_id or not emails:
+            return
+        user = self.env['res.users'].search([
+            ('share', '=', False),
+            ('company_ids', 'in', self.company_id.ids),
+            '|', ('login', '=', emails[0]), ('email_normalized', '=', emails[0]),
+        ], limit=1)
+        if user and not user.employee_ids.filtered(lambda employee: employee.company_id == self.company_id):
+            self.update(self._sync_user(user, bool(self.image_1920)))
 
     @api.onchange('company_id')
     def _onchange_timezone(self):
@@ -2001,27 +2017,28 @@ class HrEmployee(models.Model):
         # Returns a dict {employee_id: tz}
         return {emp.id: emp._get_tz(date=date) for emp in self}
 
+    def _get_first_contract_version_at(self, date):
+        """Return {employee_id: version} with the lowest-id version in contract at ``date``."""
+        versions = self.sudo().version_ids.filtered_domain([
+            ('contract_date_start', '!=', False),
+            ('contract_date_start', '<=', date),
+            '|',
+                ('contract_date_end', '=', False),
+                ('contract_date_end', '>=', date),
+        ])
+        res = {}
+        for version in versions.sorted('id'):
+            res.setdefault(version.employee_id.id, version)
+        return res
+
     def _get_calendars(self, date_from=None):
         res = super()._get_calendars(date_from=date_from)
         if not date_from:
             return res
 
         date_from = fields.Date.to_date(date_from)
-        versions_by_employee = self.env['hr.version'].sudo()._read_group(
-            domain=[
-                ('employee_id', 'in', self.ids),
-                ('contract_date_start', '!=', False),
-                ('contract_date_start', '<=', date_from),
-                '|',
-                    ('contract_date_end', '=', False),
-                    ('contract_date_end', '>=', date_from),
-            ],
-            groupby=['employee_id'],
-            aggregates=['id:recordset'],
-        )
-        for employee, versions in versions_by_employee:
-            if versions:
-                res[employee.id] = versions[0].resource_calendar_id.sudo(self.env.su)
+        for employee_id, version in self._get_first_contract_version_at(date_from).items():
+            res[employee_id] = version.resource_calendar_id.sudo(self.env.su)
         return res
 
     def _get_hours_per_week_batch(self, date_from=None):
@@ -2030,21 +2047,8 @@ class HrEmployee(models.Model):
             return res
 
         date_from = fields.Date.to_date(date_from)
-        versions_by_employee = self.env['hr.version'].sudo()._read_group(
-            domain=[
-                ('employee_id', 'in', self.ids),
-                ('contract_date_start', '!=', False),
-                ('contract_date_start', '<=', date_from),
-                '|',
-                    ('contract_date_end', '=', False),
-                    ('contract_date_end', '>=', date_from),
-            ],
-            groupby=['employee_id'],
-            aggregates=['id:recordset'],
-        )
-        for employee, versions in versions_by_employee:
-            if versions:
-                res[employee.id] = versions[0].resource_calendar_id.hours_per_week
+        for employee_id, version in self._get_first_contract_version_at(date_from).items():
+            res[employee_id] = version.resource_calendar_id.hours_per_week
         return res
 
     def _get_hours_per_day_batch(self, date_from=None):
@@ -2053,21 +2057,8 @@ class HrEmployee(models.Model):
             return res
 
         date_from = fields.Date.to_date(date_from)
-        versions_by_employee = self.env['hr.version'].sudo()._read_group(
-            domain=[
-                ('employee_id', 'in', self.ids),
-                ('contract_date_start', '!=', False),
-                ('contract_date_start', '<=', date_from),
-                '|',
-                    ('contract_date_end', '=', False),
-                    ('contract_date_end', '>=', date_from),
-            ],
-            groupby=['employee_id'],
-            aggregates=['id:recordset'],
-        )
-        for employee, versions in versions_by_employee:
-            if versions:
-                res[employee.id] = versions[0].resource_calendar_id.hours_per_day
+        for employee_id, version in self._get_first_contract_version_at(date_from).items():
+            res[employee_id] = version.resource_calendar_id.hours_per_day
         return res
 
     def _get_version_periods(self, start, stop, field=None, check_contract=False):
@@ -2273,7 +2264,7 @@ class HrEmployee(models.Model):
                 date_to,
                 resources_per_tz=resources_per_tz,
                 compute_leaves=True,
-                domain=[('company_id', 'in', [False, self.company_id.id])])[self.resource_id.id]
+                domain=[('company_id', 'in', [False, self.company_id.id]), ('count_as', '=', 'leave')])[self.resource_id.id]
             return calendar_intervals
         duration_data = Intervals()
         version_prev = datetime.combine(valid_versions[0].date_start, time.min, employee_tz)
@@ -2386,10 +2377,8 @@ class HrEmployee(models.Model):
         }
 
     def _store_avatar_card_fields(self, res: Store.FieldList):
-        res.one("department_id", ["name"])
         res.attr("resource_id", "_store_avatar_card_fields")
         res.one("user_id", "_store_avatar_card_fields")
-        res.one("work_location_id", ["location_type", "name"])
         res.extend([
             "active",
             "company_id",

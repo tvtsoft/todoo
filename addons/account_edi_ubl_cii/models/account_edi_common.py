@@ -6,12 +6,13 @@ from collections import defaultdict
 from copy import deepcopy
 from markupsafe import Markup
 from lxml import etree
+from datetime import datetime
 
 from odoo import _, api, fields, models, Command
 from odoo.addons.account.tools import dict_to_xml
 from odoo.exceptions import UserError, ValidationError
 from odoo.fields import Domain
-from odoo.tools import float_compare, float_is_zero, float_repr, html2plaintext, pdf, str2bool
+from odoo.tools import float_compare, float_is_zero, float_repr, html2plaintext, pdf
 from odoo.tools.float_utils import float_round
 from odoo.tools.misc import formatLang, html_escape
 from odoo.tools.translate import _lt
@@ -888,11 +889,28 @@ class AccountEdiCommon(models.AbstractModel):
         return lines_values, logs
 
     def _retrieve_invoice_line_vals(self, record, tree, document_type=False, qty_factor=1):
+        # Start and End date (enterprise fields)
+        xpath_dict = self._get_invoice_line_xpaths(document_type, qty_factor)
+        deferred_values = {}
+        start_date = end_date = None
+        if self.env['account.move.line']._fields.get('deferred_start_date'):
+            start_date_node = tree.find(xpath_dict['deferred_start_date'])
+            end_date_node = tree.find(xpath_dict['deferred_end_date'])
+            if start_date_node is not None and end_date_node is not None:  # there is a constraint forcing none or the two to be set
+                start_date = datetime.strptime(start_date_node.text.strip(), xpath_dict['date_format'])
+                end_date = datetime.strptime(end_date_node.text.strip(), xpath_dict['date_format'])
+        deferred_values = {
+            'deferred_start_date': start_date,
+            'deferred_end_date': end_date,
+        }
         line_vals = self._retrieve_line_vals(record, tree, document_type, qty_factor)
         if not line_vals.get('price_subtotal'):
             return None
 
-        return line_vals
+        return {
+            **line_vals,
+            **deferred_values,
+        }
 
     @api.model
     def _retrieve_rebate_val(self, tree, xpath_dict, quantity):
@@ -1500,7 +1518,7 @@ class AccountEdiCommon(models.AbstractModel):
 
         partner_bank_values['partner_banks'] = partner_banks
         if partner_banks:
-            collected_values['to_write']['partner_bank_id'] = partner_banks[:1].id
+            collected_values['to_write']['partner_bank_id'] = partner_banks.sorted(lambda bank: not bank.allow_out_payment)[:1].id
 
     def _import_invoice_predict_values(self, collected_values):
         if (
@@ -1619,6 +1637,7 @@ class AccountEdiCommon(models.AbstractModel):
             AccountTax._import_retrieve_tax_from_account_default_tax,
             AccountTax._import_retrieve_tax_from_predicted_tax,
             AccountTax._import_retrieve_tax_from_price_include_exclude,
+            AccountTax._import_retrieve_tax_from_fixed_allowance_charge,
         ]
 
     def _import_invoice_retrieve_taxes(self, collected_values):
@@ -1784,6 +1803,10 @@ class AccountEdiCommon(models.AbstractModel):
             base_line_kwargs['_create_values']['analytic_distribution'] = analytic_distribution
         if vehicle_id := to_write.get('vehicle_id'):
             base_line_kwargs['_create_values']['vehicle_id'] = vehicle_id
+        if deferred_start_date := to_write.get('deferred_start_date'):
+            base_line_kwargs['_create_values']['deferred_start_date'] = deferred_start_date
+        if deferred_end_date := to_write.get('deferred_end_date'):
+            base_line_kwargs['_create_values']['deferred_end_date'] = deferred_end_date
 
         base_line_kwargs['_create_values'] = {
             **base_line_kwargs['_create_values'],
@@ -2001,7 +2024,7 @@ class AccountEdiCommon(models.AbstractModel):
     def _generate_pdf_attachment(self, invoice, tree):
         """ ATTEMPTS to create a PDF attachment when the XML file doesn't provide one."""
         IrConfigParam = self.env['ir.config_parameter'].sudo()
-        disable_pdf_in_xml = str2bool(IrConfigParam.get_param("account_edi_ubl_cii.disable_pdf_in_xml", 'False'))
+        disable_pdf_in_xml = IrConfigParam.get_bool("account_edi_ubl_cii.disable_pdf_in_xml")
         additional_docs = self._import_attachments(invoice, tree)
         if (
             additional_docs or
