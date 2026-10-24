@@ -2038,7 +2038,7 @@ class AccountMove(models.Model):
                 move_type_sql_condition=move_type_sql_condition,
             )))
         return {
-            self.env['account.move'].browse(move_id): self.env['account.move'].browse(duplicate_ids)
+            self.env['account.move'].browse(move_id): self.env['account.move'].browse(duplicate_ids)._filtered_access('read')
             for move_id, duplicate_ids in result
         }
 
@@ -4988,7 +4988,7 @@ class AccountMove(models.Model):
             if partial_values['is_exchange']:
                 partial_values['amount'] = abs(partial_values['aml'].balance)
 
-        return partial_values_list
+        return sorted(partial_values_list, key=lambda vals: (vals['aml'].date, vals['aml'].id))
 
     def _get_reconciled_invoices_partials(self):
         ''' Helper to retrieve the details about reconciled invoices.
