@@ -21,7 +21,7 @@ import {
     isValidEmail,
     orderUsageUTCtoLocalUtil,
 } from "@point_of_sale/utils";
-import { getOrderLineValues } from "./card_utils";
+import { getAttributeValues, getOrderLineValues } from "./card_utils";
 import { EpsonPrinter } from "@point_of_sale/app/utils/printer/epson_printer";
 import { initLNA } from "@point_of_sale/app/utils/init_lna";
 
@@ -295,6 +295,9 @@ export class SelfOrder extends Reactive {
         customValues = {},
         comboValues = {}
     ) {
+        if (productTemplate.isDeletedCombination(getAttributeValues(selectedValues, this.models))) {
+            return;
+        }
         const product = productTemplate.product_variant_ids[0];
         const values = getOrderLineValues(
             this,
@@ -922,14 +925,15 @@ export class SelfOrder extends Reactive {
                 ? Object.values(this.currentOrder.uiState.lineChanges[line.uuid]).every((v) => !v)
                 : false;
 
-            const wrongChild = line.combo_line_ids.find((l) => !this.isLineProductAvailable(l));
-            if (wrongChild || !this.isLineProductAvailable(line)) {
+            const wrongChild = line.combo_line_ids.find((l) => !l.product_id.self_order_available);
+            const lineAvailable = this.isLineProductAvailable(line);
+            if (wrongChild || !lineAvailable) {
                 if (alreadySent) {
                     line.qty = alreadySent.qty;
                     line.customer_note = alreadySent.customer_note;
                     line.selected_attributes = alreadySent.selected_attributes;
                 } else {
-                    const productName = !this.isLineProductAvailable(line)
+                    const productName = !lineAvailable
                         ? line.product_id?.name
                         : wrongChild?.product_id?.name;
 

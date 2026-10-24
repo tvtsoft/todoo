@@ -111,7 +111,8 @@ class Cart(PaymentPortal):
         :rtype: dict
         """
         order_sudo = request.cart or request.website._create_cart()
-        quantity = int(quantity)  # Do not allow float values in ecommerce by default
+        # Do not allow float values in ecommerce by default
+        quantity = (quantity and int(quantity)) or 1
 
         product = request.env['product.product'].browse(product_id).exists()
         if product and no_variant_attribute_value_ids:
@@ -363,6 +364,16 @@ class Cart(PaymentPortal):
             line_id = order_sudo.order_line.filtered(
                 lambda sol: sol.product_id.id == product_id
             )[:1].id
+
+        # Combo item lines are updated together with their combo
+        if line_id:
+            target_line = order_sudo.order_line.filtered(lambda sol: sol.id == line_id)
+            if target_line.combo_item_id:
+                return {
+                    "warning": _(
+                        "This product is part of a combo and can't be updated individually."
+                    )
+                }
 
         values = order_sudo._cart_update_line_quantity(line_id, quantity, **kwargs)
 
