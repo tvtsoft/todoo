@@ -1,5 +1,5 @@
-import { test, expect } from "@odoo/hoot";
-import { mountWithCleanup } from "@web/../tests/web_test_helpers";
+import { test, expect, animationFrame } from "@odoo/hoot";
+import { contains, mountWithCleanup } from "@web/../tests/web_test_helpers";
 import { setupPosEnv } from "../utils";
 import { ProductConfiguratorPopup } from "@point_of_sale/app/components/popups/product_configurator_popup/product_configurator_popup";
 import { definePosModels } from "../data/generate_model_definitions";
@@ -143,4 +143,91 @@ test("Same attribute on two lines keeps one selection per line", async () => {
         false
     );
     expect(Object.keys(line.selectedAttributes).length).toBe(2);
+});
+
+const setupAndAssertExcludedValuesConfigurator = async (displayType, selector) => {
+    const store = await setupPosEnv();
+    const productTemplate = store.models["product.template"].get(51);
+    const ptal = store.models["product.template.attribute.line"].get(5);
+
+    store.models["product.attribute"].get(10).display_type = displayType;
+    store.models["product.attribute"].get(7).display_type = displayType;
+
+    productTemplate.update({
+        attribute_line_ids: [productTemplate.attribute_line_ids[0], ptal],
+    });
+
+    const [choco, vanilla, s, m] = store.models["product.template.attribute.value"]
+        .getAll()
+        .filter((c) => [5, 6, 8, 9].includes(c.id));
+
+    choco.update({ excluded_value_ids: [m] });
+    vanilla.update({ excluded_value_ids: [s] });
+    store.processProductAttributes();
+
+    await mountWithCleanup(ProductConfiguratorPopup, {
+        props: {
+            productTemplate: productTemplate,
+            getPayload: () => {},
+            close: () => {},
+        },
+    });
+
+    expect(`label[${selector}='Chocolate']`).toHaveClass("active");
+    expect(`label[${selector}='S']`).toHaveClass("active");
+    expect(".btn:contains('Add')").not.toHaveClass("disabled");
+
+    await contains(`label[${selector}='Vanilla']`).click();
+    expect(`label[${selector}='Vanilla']`).toHaveClass("active");
+    expect(".btn:contains('Add')").toHaveClass("disabled");
+    await contains(`label[${selector}='M']`).click();
+    expect(`label[${selector}='M']`).toHaveClass("active");
+    expect(".btn:contains('Add')").not.toHaveClass("disabled");
+
+    await contains(`label[${selector}='Chocolate']`).click();
+    expect(`label[${selector}='Chocolate']`).toHaveClass("active");
+    expect(".btn:contains('Add')").toHaveClass("disabled");
+};
+
+test("pills: excluded value remains selectable and resolves to a valid combination", async () => {
+    await setupAndAssertExcludedValuesConfigurator("pills", "name");
+});
+
+test("color: excluded value remains selectable and resolves to a valid combination", async () => {
+    await setupAndAssertExcludedValuesConfigurator("color", "title");
+});
+
+test("pills and range attributes render as selectable pills", async () => {
+    const store = await setupPosEnv();
+    const productTemplate = store.models["product.template"].get(ICE_CREAM_TMPL_ID);
+    const attributeLine = store.models["product.template.attribute.line"].get(3);
+    productTemplate.update({ attribute_line_ids: [attributeLine] });
+    store.addNewOrder().setPricelist(false);
+
+    let payload;
+    await mountWithCleanup(ProductConfiguratorPopup, {
+        props: {
+            productTemplate,
+            getPayload: (value) => (payload = value),
+            close: () => expect.step("close"),
+        },
+    });
+    for (const displayType of ["pills", "range"]) {
+        attributeLine.attribute_id.update({
+            display_type: displayType,
+            create_variant: "no_variant",
+        });
+        await animationFrame();
+        expect(".attribute-name-cell label.btn").toHaveCount(2);
+        expect(".attribute-name-cell label.active").toHaveText("Chocolate");
+
+        await contains('label[name="Vanilla"]').click();
+        expect(".attribute-name-cell label.active > span").toHaveText("Vanilla");
+        expect('input[type="radio"]:checked').toHaveCount(1);
+
+        await contains('label[name="Chocolate"]').click();
+        await contains(".modal-footer .btn-primary").click();
+        expect(payload.attribute_value_ids).toEqual([5]);
+        expect.verifySteps(["close"]);
+    }
 });

@@ -193,12 +193,14 @@ class IrAttachment(models.Model):
                     with open(tmp_path, 'wb') as tmp_file:
                         shutil.copyfileobj(bin_value, tmp_file)
                         tmp_file.flush()
-                        if hasattr(os, 'fchmod'):
-                            os.fchmod(tmp_file.fileno(), 0o444)  # r--r--r--
-                        else:
-                            os.chmod(tmp_path, 0o444)  # r--r--r--
+                        with contextlib.suppress(PermissionError):
+                            if hasattr(os, 'fchmod'):
+                                os.fchmod(tmp_file.fileno(), 0o444)  # r--r--r--
+                            else:
+                                os.chmod(tmp_path, 0o444)  # r--r--r--
                 else:
-                    os.chmod(tmp_path, 0o444)  # r--r--r--
+                    with contextlib.suppress(PermissionError):
+                        os.chmod(tmp_path, 0o444)  # r--r--r--
 
                 # "commit" the file by moving it to its right place
                 try:
@@ -282,6 +284,7 @@ class IrAttachment(models.Model):
                     if check_file.endswith(GC_FILE_SUFFIX):
                         # leftover from a previous GC
                         # move the file back if it exists
+                        fname = fname.removesuffix(GC_FILE_SUFFIX)
                         try:
                             full_path = self._full_path(fname)
                             os.replace(full_path + GC_FILE_SUFFIX, full_path)
@@ -291,11 +294,14 @@ class IrAttachment(models.Model):
                             _logger.info("filestore gc was interrupted, moved back %s", filename)
                         # move the check file back, ignore if file already exists
                         original_check_file = check_file.removesuffix(GC_FILE_SUFFIX)
-                        try:
-                            if not os.path.exists(original_check_file):
-                                os.rename(check_file, original_check_file)
-                        except OSError:
+                        if os.path.exists(original_check_file):
                             os.unlink(check_file)
+                        else:
+                            try:
+                                os.rename(check_file, original_check_file)
+                            except OSError:
+                                _logger.info("filestore gc failed to add back %s", original_check_file)
+                                os.unlink(check_file)
                     elif os.path.getmtime(check_file) < limit_time:
                         # we can collect the file
                         yield (fname, check_file)
@@ -779,7 +785,7 @@ class IrAttachment(models.Model):
         records = self.sudo().with_context(active_test=False).search_fetch(
             domain & Domain('res_model', '!=', False) & ~sec_domain, SECURITY_FIELDS, order='id', limit=MAX_SEARCH_LIMIT).sudo(False)
         if len(records) == MAX_SEARCH_LIMIT:  # avoid out of memory
-            raise ValueError(self.env._("Cannot search, too many attachments"))
+            raise UserError(self.env._("Cannot search, too many attachments"))
         records = records._filtered_access(operation)
         # [('id', 'any!', query_with_ids)] is optimized in sec_domain
         return sec_domain | Domain('id', 'any!', records._as_query(ordered=False))
@@ -924,10 +930,10 @@ class IrAttachment(models.Model):
         if self.env.context.get('ir_attachment_from_stream') is not CREATE_FROM_STREAM_FLAG:
             # remove computed field depending of raw
             vals_list = [{
-                key: value
-                for key, value
-                in vals.items()
-                if key not in ('file_size', 'checksum', 'store_fname')
+                **vals,
+                'file_size': 0,
+                'checksum': False,
+                'store_fname': False,
             } for vals in vals_list]
         raw_map = {}
 
@@ -991,11 +997,14 @@ class IrAttachment(models.Model):
                 raise UserError(_("Attachment is not encoded in base64."))
             checksum = self._compute_checksum(vals['raw'] or b'')
             # Create only if record does not already exist for checksum and mimetype
-            result += self.sudo().search([
+            # only reuse the attachments the current user can write, as callers may
+            # link new attachments to them (e.g. the resized variants of an image).
+            existing = self.sudo().search([
                 ['id', '!=', False],  # No implicit condition on res_field.
                 ['checksum', '=', checksum],
                 ['mimetype', '=', vals['mimetype']],
-            ], limit=1) or self.create(vals)
+            ], limit=100, order='res_field nulls first, id').with_env(self.env)._filtered_access('write')[:1]
+            result += existing or self.create(vals)
         return result
 
     def _generate_access_token(self):

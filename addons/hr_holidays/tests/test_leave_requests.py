@@ -310,6 +310,29 @@ class TestLeaveRequests(TestHrHolidaysCommon):
                     'request_date_to': time.strftime('2022-02-04'),
                 })
 
+    def test_limited_type_not_enough_days_on_end_date_write(self):
+        """ Moving only the end date of a request checks the allocation """
+        with freeze_time('2022-01-05'):
+            allocation = self.env['hr.leave.allocation'].with_user(self.user_hruser_id).create({
+                'name': 'Days for limited category',
+                'employee_id': self.employee_emp_id,
+                'work_entry_type_id': self.holidays_type_2.id,
+                'number_of_days': 2,
+                'state': 'confirm',
+                'date_from': '2022-01-01',
+                'date_to': '2022-12-31',
+            })
+            allocation.action_approve()
+            leave = self.env['hr.leave'].with_user(self.user_employee_id).create({
+                'name': 'Hol21',
+                'employee_id': self.employee_emp_id,
+                'work_entry_type_id': self.holidays_type_2.id,
+                'request_date_from': '2022-02-01',
+                'request_date_to': '2022-02-02',
+            })
+            with self.assertRaises(ValidationError):
+                leave.with_user(self.user_employee_id).write({'request_date_to': '2022-02-04'})
+
     @mute_logger('odoo.models.unlink', 'odoo.addons.mail.models.mail_mail')
     def test_limited_type_days_left(self):
         """  Employee creates a leave request in a limited category and has enough days left  """
@@ -3330,14 +3353,14 @@ class TestLeaveRequests(TestHrHolidaysCommon):
         leave = self._leave(worked)
         self.assertEqual(
             (leave.date_from, leave.date_to),
-            (self._utc(self._wall(self.monday, 8)), self._utc(self._wall(self.monday, 17))),
-            "the request borrowed the hours of the day it stands on",
+            (self._utc(self._wall(self.monday, 8)), self._utc(self._wall(self.monday, 16))),
+            "the request borrowed the start and the hours of the day it stands on",
         )
         self.assertEqual(leave.number_of_hours, 8)
 
         # mapping any of these back would end the request the day before
         for label, wall_from, wall_to in (
-            ('an echo of the compute', self._wall(self.monday, 8), self._wall(self.monday, 17)),
+            ('an echo of the compute', self._wall(self.monday, 8), self._wall(self.monday, 16)),
             ('the end dragged onto the start', None, self._wall(self.monday, 8)),
             ('the start dragged past the end', self._wall(self.monday, 18), None),
         ):
@@ -3582,3 +3605,32 @@ class TestLeaveRequests(TestHrHolidaysCommon):
             'request_date_to': '2025-09-02',
         })
         self.assertEqual(other_leave.state, 'validate')
+
+    def test_working_time_beyond_the_schedule_becomes_overtime(self):
+        """
+        10h of Work from 08:00 on a day scheduled 08:00-12:00 and 13:00-17:00 end at 18:00 the
+        same day, and the 2 hours beyond the schedule become overtime.
+        """
+        overtime_rule = self.env.ref('hr_work_entry.hr_time_rule_employee_schedule')
+        self.env['hr.time.rule'].search([]).active = False
+        overtime_rule.active = True
+        work = self.env.ref('hr_work_entry.generic_work_entry_type_attendance')
+        work.write({'request_unit': 'hour', 'requires_allocation': False})
+        employee = self._employee_on(self.company.resource_calendar_id)
+
+        with Form(self.env['hr.leave'].with_context(default_employee_id=employee.id)) as form:
+            form.work_entry_type_id = work
+            form.request_date_hour_from = self._utc(self._wall(self.monday, 8))
+            form.request_date_hour_to = self._utc(self._wall(self.monday, 17))
+            form.number_of_hours = 10
+            self.assertEqual(form.request_hour_to, 18, "08:00 + 10h ends at 18:00, on the same day")
+        leave = form.record
+
+        overtime = self.env['hr.leave'].search([('source_leave_id', '=', leave.id)])
+        self.assertEqual((leave.date_from, leave.date_to, leave.number_of_hours),
+                         (self._utc(self._wall(self.monday, 8)), self._utc(self._wall(self.monday, 16)), 8),
+                         "the 8 scheduled hours stay Work")
+        self.assertEqual((overtime.work_entry_type_id, overtime.date_from, overtime.date_to),
+                         (overtime_rule.work_entry_type_id,
+                          self._utc(self._wall(self.monday, 16)), self._utc(self._wall(self.monday, 18))),
+                         "the 2 hours beyond the schedule are overtime")

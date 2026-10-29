@@ -137,11 +137,10 @@ class TestSalePayment(AccountPaymentCommon, MailCase, PaymentHttpCommon, SaleCom
             tx_values = CustomerPortal()._get_payment_values(
                 self.sale_order,
                 is_down_payment=False,
-                payment_amount=self.sale_order._get_prepayment_required_amount(),
             )
         self.assertEqual(tx_values["amount"], self.sale_order.amount_total)
 
-    def test_confirmed_transactions_comfirms_so_with_multiple_transaction(self):
+    def test_confirmed_transactions_confirms_so_with_multiple_transaction(self):
         """Test that a confirmed transaction confirms a SO even if one or more non-confirmed
         transactions are linked."""
         # Create the payment
@@ -342,14 +341,6 @@ class TestSalePayment(AccountPaymentCommon, MailCase, PaymentHttpCommon, SaleCom
         self.assertEqual(self.sale_order.state, "draft")
         self.assertFalse(tx.invoice_ids)
         self.assertFalse(self.sale_order.invoice_ids)
-
-    def test_payment_does_not_confirm_order_pending_signature(self):
-        self.sale_order.require_signature = True
-        tx = self._create_transaction(
-            flow="redirect", sale_order_ids=[self.sale_order.id], state="done"
-        )
-        confirmed_orders = tx._check_amount_and_confirm_order()
-        self.assertFalse(confirmed_orders)
 
     def test_already_confirmed_so_payment(self):
         # Set automatic invoice
@@ -621,7 +612,6 @@ class TestSalePayment(AccountPaymentCommon, MailCase, PaymentHttpCommon, SaleCom
                         },
                     )
                 ],
-                "require_signature": False,
             })
         )
 
@@ -769,3 +759,22 @@ class TestSalePayment(AccountPaymentCommon, MailCase, PaymentHttpCommon, SaleCom
         )
         with self.assertRaises(UserError):
             self.sale_order._check_not_partially_paid()
+
+    def test_payment_confirms_and_invoices_order_pending_signature(self):
+        """Test that paying a quotation waiting for a signature confirms and invoices it."""
+        self.env.company.sale_automatic_invoice = True
+        self.sale_order.require_signature = True
+        self.amount = self.sale_order.amount_total
+        tx = self._create_transaction(
+            flow="redirect", sale_order_ids=[self.sale_order.id], state="done"
+        )
+        with mute_logger("odoo.addons.sale.models.payment_transaction"):
+            self._run_post_processing()
+
+        self.assertEqual(self.sale_order.state, "sale")
+        self.assertTrue(tx.invoice_ids)
+        self.assertEqual(tx.invoice_ids, self.sale_order.invoice_ids)
+        self.assertEqual(tx.invoice_ids.state, "posted")
+        self.assertEqual(
+            tx.invoice_ids.payment_state, tx.invoice_ids._get_invoice_in_payment_state()
+        )

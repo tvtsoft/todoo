@@ -622,6 +622,73 @@ class TestPointOfSaleFlow(CommonPosTest):
             {'amount': 450.0, 'payment_method_id': self.bank_payment_method.id},
         ])
 
+    def _get_customer_account_draft_order_data(self, uuid):
+        self.pos_config_usd.open_ui()
+        return {
+            'amount_paid': 0,
+            'amount_return': 0,
+            'amount_tax': 0,
+            'amount_total': 450,
+            'date_order': fields.Datetime.to_string(fields.Datetime.now()),
+            'fiscal_position_id': False,
+            'pricelist_id': self.pos_config_usd.pricelist_id.id,
+            'lines': [[0, 0, {
+                'discount': 0,
+                'price_unit': 450.0,
+                'product_id': self.product.id,
+                'price_subtotal': 450.0,
+                'price_subtotal_incl': 450.0,
+                'tax_ids': [[6, False, []]],
+                'qty': 1,
+                'uuid': f'line-{uuid}',
+            }]],
+            'name': f'Order {uuid}',
+            'partner_id': False,
+            'session_id': self.pos_config_usd.current_session_id.id,
+            'state': 'draft',
+            'uuid': uuid,
+            'user_id': self.env.uid,
+        }
+
+    def _get_customer_account_paid_order_data(self, draft_data, partner_id):
+        paid_data = copy.deepcopy(draft_data)
+        paid_data.update({
+            'amount_paid': 450,
+            'lines': [],
+            'partner_id': partner_id,
+            'state': 'paid',
+            'payment_ids': [[0, 0, {
+                'amount': 450,
+                'name': fields.Datetime.to_string(fields.Datetime.now()),
+                'payment_method_id': self.credit_payment_method.id,
+                'uuid': f"pay-{draft_data['uuid']}",
+            }]],
+        })
+        return paid_data
+
+    def test_pay_synced_draft_order_with_customer_account(self):
+        """A draft order already synced without customer (e.g. a restaurant table
+        order) can be paid with a customer account once the customer is set."""
+        draft_data = self._get_customer_account_draft_order_data('32346-123-1234')
+        self.env['pos.order'].sync_from_ui([copy.deepcopy(draft_data)])
+        order = self.env['pos.order'].search([('uuid', '=', '32346-123-1234')])
+        self.assertFalse(order.partner_id)
+
+        paid_data = self._get_customer_account_paid_order_data(draft_data, self.partner.id)
+        self.env['pos.order'].sync_from_ui([paid_data])
+        self.assertRecordValues(order, [{'state': 'paid', 'partner_id': self.partner.id}])
+        self.assertRecordValues(order.payment_ids, [
+            {'amount': 450.0, 'payment_method_id': self.credit_payment_method.id, 'partner_id': self.partner.id},
+        ])
+
+    def test_pay_synced_draft_order_with_customer_account_without_customer(self):
+        draft_data = self._get_customer_account_draft_order_data('42346-123-1234')
+        self.env['pos.order'].sync_from_ui([copy.deepcopy(draft_data)])
+
+        paid_data = self._get_customer_account_paid_order_data(draft_data, False)
+        with self.assertRaisesRegex(ValidationError, "A customer must be set on the order to pay with a customer account."):
+            self.env['pos.order'].sync_from_ui([paid_data])
+
     def test_refund_qty_refund_cancel(self):
         """
         Test the refunded qty of an order, when the refund order has been cancelled
@@ -1114,7 +1181,7 @@ class TestPointOfSaleFlow(CommonPosTest):
         self.assertEqual(methods.mapped('name'), ['Cash', 'Card', 'Customer Account'])
         self.assertEqual(methods.mapped('sequence'), [1, 2, 4])
         new_pm = self.env['pos.payment.method'].create({'name': 'Quick Pay', 'type': 'bank'})
-        self.assertEqual(new_pm.sequence, 5)
+        self.assertGreaterEqual(new_pm.sequence, 5)
 
     def test_add_two_lines_with_same_uuid_through_sync_from_ui(self):
         """Test that adding two lines with the same UUID doesn't cause issues."""
@@ -1383,6 +1450,38 @@ class TestPointOfSaleFlow(CommonPosTest):
         self.assertNotIn(item_future_start.id, loaded_ids,
             "item with date_start still in the future must not be fetched")
 
+    def test_load_product_from_pos_skips_archived_attribute_values(self):
+        """A product loaded on demand (search, barcode) must not bring the
+        archived values of its attribute lines, as the initial load does not."""
+        self.pos_config_usd.open_ui()
+        attribute = self.env['product.attribute'].create({
+            'name': 'Grape',
+            'create_variant': 'no_variant',
+            'value_ids': [Command.create({'name': 'Chardonnay'}), Command.create({'name': 'Merlot'})],
+        })
+        template = self.env['product.template'].create({
+            'name': 'Cuvee Wine',
+            'available_in_pos': True,
+            'attribute_line_ids': [Command.create({
+                'attribute_id': attribute.id,
+                'value_ids': [Command.set(attribute.value_ids.ids)],
+            })],
+        })
+        chardonnay, merlot = template.attribute_line_ids.product_template_value_ids
+        # Kept archived instead of deleted when the value is still referenced (e.g. on an order)
+        chardonnay.ptav_active = False
+
+        data = self.env['product.template'].load_product_from_pos(
+            self.pos_config_usd.id, [('id', '=', template.id)],
+        )
+        self.assertEqual([v['id'] for v in data['product.template.attribute.value']], [merlot.id])
+
+        # A value cached before being archived must be removed from the device
+        to_remove = self.pos_config_usd.current_session_id.filter_local_data({
+            'product.template.attribute.value': [chardonnay.id, merlot.id],
+        })
+        self.assertEqual(to_remove['product.template.attribute.value'], [chardonnay.id])
+
     def test_sequence_dynamic_prefix_suffix(self):
         """Test that sequence_number is correctly extracted when sequence has dynamic prefix/suffix."""
         self.pos_config_usd.open_ui()
@@ -1506,3 +1605,44 @@ class TestPointOfSaleFlow(CommonPosTest):
             order.amount_total + refund.amount_total, 0.0,
             msg="The totals of an order and of its refund should cancel each other.",
         )
+
+    def test_switch_payment_to_customer_account_requires_customer(self):
+        order, _ = self.create_backend_pos_order({
+            'line_data': [{'product_id': self.ten_dollars_no_tax.product_variant_id.id}],
+            'payment_data': [{'payment_method_id': self.cash_payment_method.id, 'amount': 10}],
+        })
+        with self.assertRaises(ValidationError):
+            order.payment_ids.payment_method_id = self.credit_payment_method
+
+        order.partner_id = self.partner_adgu
+        order.write({'payment_ids': [Command.update(order.payment_ids.id, {'payment_method_id': self.credit_payment_method.id})]})
+        self.assertEqual(order.payment_ids.payment_method_id, self.credit_payment_method)
+
+        session = order.session_id
+        session.close_session_from_ui()
+        self.assertEqual(session.state, 'closed')
+        self.assertTrue(order.is_globally_invoiced, "The order should be invoiced when closing the session.")
+        customer_receivable = self.env['account.move.line'].search([
+            ('partner_id', '=', self.partner_adgu.id),
+            ('account_id', '=', self.partner_adgu.property_account_receivable_id.id),
+            ('parent_state', '=', 'posted'),
+            ('reconciled', '=', False),
+        ])
+        self.assertEqual(sum(customer_receivable.mapped('amount_residual')), 10)
+
+    def test_snooze_deletion_notifies_other_devices(self):
+        """ Stopping a snooze should notify other devices """
+        self.pos_config_usd.open_ui()
+        snooze = self.env['pos.snooze'].create({
+            'product_template_id': self.ten_dollars_no_tax.id,
+            'pos_config_id': self.pos_config_usd.id,
+            'start_time': fields.Datetime.now(),
+        })
+
+        # Catch the notification sent to other devices
+        with patch.object(self.env.registry['pos.config'], '_notify') as mock_notify:
+            snooze.unlink()
+
+        # Collect {notification name: message} of every notifications
+        messages = {call.args[0]: call.args[1] for call in mock_notify.call_args_list}
+        self.assertEqual(messages['SYNCHRONISATION'].get('deleted_record_ids'), {'pos.snooze': [snooze.id]})

@@ -7,6 +7,7 @@ from lxml import etree
 from odoo import Command, _, api, fields, models
 from odoo.fields import Domain
 from odoo.tools import formatLang, groupby, frozendict, html2plaintext, html_escape, unique
+from odoo.tools.float_utils import float_compare
 from odoo.tools.partner_identifiers import get_tin_metadata_of_country
 
 from odoo.addons.account.tools import dict_to_xml
@@ -1995,6 +1996,10 @@ class AccountEdiUBL(models.AbstractModel):
             first_line = group[0]
             total_excluded_currency = sum(bl['tax_details']['total_excluded_currency'] for bl in group)
 
+            tax_details = first_line['tax_details']
+            for base_line in group[1:]:
+                tax_details = AccountTax._merge_tax_details(tax_details, base_line['tax_details'])
+
             collapsed_line = AccountTax._prepare_base_line_for_taxes_computation(
                 first_line['record'],
                 quantity=1.0,
@@ -2002,14 +2007,13 @@ class AccountEdiUBL(models.AbstractModel):
                 discount=0.0,
                 tax_ids=first_line['tax_ids'],
                 currency_id=first_line['currency_id'],
+                tax_details=tax_details,
             )
             collapsed_line.update({
                 'name': section.name,
                 '_line_name': section.name,
                 'product_id': self.env['product.product'],
             })
-            AccountTax._add_tax_details_in_base_lines([collapsed_line], invoice.company_id)
-            AccountTax._round_base_lines_tax_details([collapsed_line], invoice.company_id)
             return collapsed_line
 
         def _get_collapsed_section_line_ids(invoice, base_lines):
@@ -2133,8 +2137,13 @@ class AccountEdiUBL(models.AbstractModel):
         if party_node is None:
             return
 
+        # Only take the CompanyID of a PartyTaxScheme using a VAT scheme (e.g. not the Peppol endpoint with its EAS)
+        customer_values['vat'] = next((
+            node.findtext('./{*}CompanyID')
+            for node in party_node.iterfind('./{*}PartyTaxScheme')
+            if (node.findtext('./{*}TaxScheme/{*}ID') or '').upper() in ('VAT', 'GST', 'NOT_EU_VAT', '63')
+        ), None)
         for key, xpaths in (
-            ('vat', [".//{*}CompanyID"]),
             ('phone', [".//{*}Telephone"]),
             ('name', [
                 ".//{*}RegistrationName",
@@ -2774,7 +2783,14 @@ class AccountEdiUBL(models.AbstractModel):
         }
 
     def _import_ubl_invoice_line_prepare_charge_tax_values(self, collected_values, charge):
-        if charge['reason_code'] != 'AEO':
+        discount_precision_digits = self.env['decimal.precision'].precision_get('Discount')
+        if (
+            charge['reason_code'] != 'AEO'
+            # Since a fixed tax is not affected by the discount, if the discount is 100.0,
+            # we don't search for a matching tax since it will create a tax amount that is not expected
+            # for the document.
+            or not float_compare(collected_values['to_write']['discount'], 100.0, precision_digits=discount_precision_digits)
+        ):
             return
 
         odoo_document_type = collected_values['odoo_document_type']

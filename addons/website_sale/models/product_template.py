@@ -329,8 +329,6 @@ class ProductTemplate(models.Model):
         return records
 
     def write(self, vals):
-        if "active" in vals and not vals["active"] and any(pt._is_donation() for pt in self):
-            raise ValidationError(self.env._("Donation products cannot be archived."))
         # Clear empty ecommerce description content to avoid side-effects on product pages
         # when there is no content to display anyway.
         if vals.get("description_ecommerce"):
@@ -392,6 +390,7 @@ class ProductTemplate(models.Model):
                     Command.set([
                         copied_ptavs[ptav.product_attribute_value_id.id]
                         for ptav in original_image.attribute_value_ids
+                        if ptav.product_attribute_value_id.id in copied_ptavs
                     ])
                 ]
         return template_copies

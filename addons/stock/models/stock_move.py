@@ -2239,7 +2239,8 @@ Please change the quantity done or the rounding precision in your settings.""",
                     all_move_line_vals = []
                     for (location_id, lot_id, package_id, owner_id), quantity in available_move_lines.items():
                         need = move.product_qty - sum(move.move_line_ids.mapped('quantity_product_uom')) - sum(taken_quantities.values())
-                        move_line_vals, taken_quantity = move._update_reserved_quantity_vals(min(quantity, need), location_id, lot_id, package_id, owner_id, strict=True)
+                        effective_need = move._get_quantity_to_assign() - sum(move.move_line_ids.mapped('quantity_product_uom')) - sum(taken_quantities.values())
+                        move_line_vals, taken_quantity = move._update_reserved_quantity_vals(min(quantity, effective_need), location_id, lot_id, package_id, owner_id, strict=True)
                         all_move_line_vals += move_line_vals
                         if move_line_vals:  # Only subtract for new lines (updates are already reflected in sum(move_line_ids))
                             taken_quantities[need, location_id, lot_id, package_id, owner_id] = taken_quantity
@@ -2558,6 +2559,10 @@ Please change the quantity done or the rounding precision in your settings.""",
         to_wh = self.location_dest_id.warehouse_id
         return self.picking_type_id.code in ('internal', 'outgoing') or (from_wh and to_wh and from_wh != to_wh)
 
+    def _get_quantity_to_assign(self):
+        self.ensure_one()
+        return self.product_qty
+
     def _get_lang(self):
         """Determine language to use for translated description"""
         return self.picking_id.partner_id.lang or self.partner_id.lang or self.env.user.lang
@@ -2643,7 +2648,7 @@ Please change the quantity done or the rounding precision in your settings.""",
                 res.append(Command.update(ml.id, {'quantity': avail_qty}))
 
         # First reserve on quants
-        if self.uom_id.compare(_move_qty(qty), 0.0) > 0:
+        if self.uom_id.compare(_move_qty(qty), 0.0) > 0 and not self._should_bypass_reservation():
             quants = self.env['stock.quant']._get_reserve_quantity(self.product_id, self.location_id, total_qty)
             for quant, avail_qty in quants:
                 if quant.id in consumed_quant:

@@ -2349,3 +2349,90 @@ class TestAccountPaymentRegister(AccountTestInvoicingWithBanksCommon, PaymentCom
         self.assertEqual(len(payments), 1)
         self.assertEqual(payments.partner_id, self.commercial_partner)
         self.assertEqual(payments.commercial_partner_id, self.commercial_partner)
+
+    def test_payment_register_exchange_rate_precision(self):
+        """ Ensure exchange_rate on account.payment.register is not rounded to 6 decimal places,
+        avoiding precision loss when inverted in the widget (e.g., 1 / 3194.44).
+        """
+        foreign_currency = self.setup_other_currency('COP', rates=[('2019-01-01', 1 / 3194.44)])
+        invoice = self.env['account.move'].create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner_a.id,
+            'currency_id': foreign_currency.id,
+            'invoice_date': '2019-01-01',
+            'date': '2019-01-01',
+            'invoice_line_ids': [
+                Command.create({
+                    'name': 'line',
+                    'price_unit': 100.0,
+                }),
+            ],
+        })
+        invoice.action_post()
+        wizard = self.env['account.payment.register'].with_context(
+            active_model='account.move',
+            active_ids=invoice.ids,
+        ).create({})
+
+        self.assertEqual(wizard.exchange_rate, invoice.invoice_currency_rate)
+        self.assertAlmostEqual(1 / wizard.exchange_rate, 3194.44, places=2)
+
+    def test_register_payments_multi_partner_same_currency(self):
+        """ Verify registering payment for multiple vendors with identical invoice
+        currencies retains the invoice currency on the wizard.
+        """
+        in_invoice_multi_1 = self.env['account.move'].create({
+            'move_type': 'in_invoice',
+            'date': '2017-01-01',
+            'invoice_date': '2017-01-01',
+            'partner_id': self.partner_a.id,
+            'currency_id': self.other_currency.id,
+            'invoice_line_ids': [Command.create({'product_id': self.product_a.id, 'price_unit': 500.0, 'tax_ids': []})],
+        })
+        in_invoice_multi_2 = self.env['account.move'].create({
+            'move_type': 'in_invoice',
+            'date': '2017-01-01',
+            'invoice_date': '2017-01-01',
+            'partner_id': self.partner_b.id,
+            'currency_id': self.other_currency.id,
+            'invoice_line_ids': [Command.create({'product_id': self.product_a.id, 'price_unit': 800.0, 'tax_ids': []})],
+        })
+        moves = in_invoice_multi_1 | in_invoice_multi_2
+        moves.action_post()
+
+        register_wizard = self.env['account.payment.register'].with_context(
+            active_model='account.move',
+            active_ids=moves.ids,
+        ).create({})
+
+        self.assertEqual(register_wizard.currency_id, self.other_currency)
+
+    def test_register_payments_multi_partner_different_currencies(self):
+        """ Verify registering payment for multiple vendors with differing invoice
+        currencies falls back to the company currency on the wizard.
+        """
+        in_invoice_multi_1 = self.env['account.move'].create({
+            'move_type': 'in_invoice',
+            'date': '2017-01-01',
+            'invoice_date': '2017-01-01',
+            'partner_id': self.partner_a.id,
+            'currency_id': self.other_currency.id,
+            'invoice_line_ids': [Command.create({'product_id': self.product_a.id, 'price_unit': 500.0, 'tax_ids': []})],
+        })
+        in_invoice_multi_2 = self.env['account.move'].create({
+            'move_type': 'in_invoice',
+            'date': '2017-01-01',
+            'invoice_date': '2017-01-01',
+            'partner_id': self.partner_b.id,
+            'currency_id': self.company_data['currency'].id,
+            'invoice_line_ids': [Command.create({'product_id': self.product_a.id, 'price_unit': 800.0, 'tax_ids': []})],
+        })
+        moves = in_invoice_multi_1 | in_invoice_multi_2
+        moves.action_post()
+
+        register_wizard = self.env['account.payment.register'].with_context(
+            active_model='account.move',
+            active_ids=moves.ids,
+        ).create({})
+
+        self.assertEqual(register_wizard.currency_id, self.company_data['currency'])

@@ -672,6 +672,17 @@ class MrpWorkorder(models.Model):
                 })],
             })
 
+    def _get_actual_duration(self, date=False):
+        """Return the actual worked duration in hours, merging overlapping intervals.
+
+        :param datetime date: Only account for time_ids that ended before this date
+        """
+        self.ensure_one()
+        return sum_intervals(Intervals([
+            [t.date_start, t.date_end, t]
+            for t in self.time_ids if t.date_end and (not date or t.date_end < date)
+        ]))
+
     def _cal_cost(self, date=False):
         """Returns total cost of time spent on workorder.
 
@@ -682,11 +693,7 @@ class MrpWorkorder(models.Model):
             if workorder._should_estimate_cost():
                 duration = workorder.duration_expected / 60
             else:
-                intervals = Intervals([
-                    [t.date_start, t.date_end, t]
-                    for t in workorder.time_ids if t.date_end and (not date or t.date_end < date)
-                ])
-                duration = sum_intervals(intervals)
+                duration = workorder._get_actual_duration(date)
             total += duration * (workorder.costs_hour or workorder.workcenter_id.costs_hour)
         return total
 
@@ -855,8 +862,6 @@ class MrpWorkorder(models.Model):
                     'date_start': dec_workorders[idx - 1].date_start,
                     'sequence': max_seq - idx,
                 }
-                if wo.workcenter_id:
-                    vals['date_finished'] = datetime.max
                 wo.with_context(bypass_duration_calculation=True).write(vals)
                 dec_workorders[idx - 1].sequence = max_seq - idx + 1
         self.production_id.workorder_ids.action_replan()
@@ -1021,7 +1026,7 @@ class MrpWorkorder(models.Model):
         return (self.duration_expected / 60.0) * (self.costs_hour or self.workcenter_id.costs_hour)
 
     def _compute_current_operation_cost(self):
-        return (self.get_duration() / 60.0) * (self.costs_hour or self.workcenter_id.costs_hour)
+        return self._get_actual_duration() * (self.costs_hour or self.workcenter_id.costs_hour)
 
     def _compute_decoration_dates(self):
         self.decoration_dates = ''

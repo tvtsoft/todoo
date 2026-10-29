@@ -42,7 +42,6 @@
                             t-on-change="() => this.props.setSelected(value)" 
                             t-att-name="value.attribute_line_id.id" 
                             t-attf-id="{{ value.attribute_id.id }}_{{ value.id }}" 
-                            t-att-disabled="this.pos.doHaveConflictWith(value, this.props.allSelectedValues)"
                             class="form-check-input d-none"
                         />
                         <label
@@ -105,7 +104,6 @@
                                 t-on-change="() => this.props.setSelected(value)"
                                 t-att-name="value.attribute_line_id.id"
                                 t-attf-id="{{ value.attribute_id.id }}_{{ value.id }}"
-                                t-att-disabled="this.pos.doHaveConflictWith(value, this.props.allSelectedValues)"
                                 class="m-2 opacity-0"
                             />
                         </label>
@@ -211,7 +209,7 @@
                         selected="this.state.attributes[attribute.id].selected" setSelected="this.setSelected(attribute)" 
                         customValue="this.state.attributes[attribute.id].custom_value" setCustomValue="this.setCustomValue(attribute)"
                         allSelectedValues="this.selectedValues" showExtraPrice="this.showExtraPrice"/>
-                    <PillsProductAttribute t-elif="attribute.attribute_id.display_type === 'pills'" attribute="attribute" 
+                    <PillsProductAttribute t-elif="['pills', 'range'].includes(attribute.attribute_id.display_type)" attribute="attribute"
                         selected="this.state.attributes[attribute.id].selected" setSelected="this.setSelected(attribute)" 
                         customValue="this.state.attributes[attribute.id].custom_value" setCustomValue="this.setCustomValue(attribute)"
                         allSelectedValues="this.selectedValues" showExtraPrice="this.showExtraPrice"/>

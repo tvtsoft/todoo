@@ -41,6 +41,21 @@ class TestWorkEntry(TestWorkEntryBase):
             'wage': 1000,
         })
 
+    def test_work_entries_values_from_dates(self):
+        """ Plain dates cover whole days in the version timezone. """
+        version = self.richard_emp.version_ids.filtered(lambda v: v.name == 'dodo')
+        self.assertEqual(version._get_tz(), 'Europe/Brussels')
+        vals_from_dates = version._get_work_entries_values(date(2015, 11, 2), date(2015, 11, 6))
+        vals_from_datetimes = version._get_work_entries_values(
+            datetime(2015, 11, 1, 23, 0, 0),  # 2015-11-02 00:00:00 in Brussels (UTC+1)
+            datetime(2015, 11, 6, 22, 59, 59, 999999),  # 2015-11-06 23:59:59.999999 in Brussels
+        )
+        self.assertEqual(vals_from_dates, vals_from_datetimes)
+        self.assertEqual(
+            sum((vals['date_stop'] - vals['date_start']).total_seconds() / 3600 for vals in vals_from_dates),
+            40,
+        )
+
     def test_work_entry_timezone(self):
         """ Test work entries with different timezone """
         hk_resource_calendar_id = self.env['resource.calendar'].create({
@@ -508,3 +523,16 @@ class TestWorkEntry(TestWorkEntryBase):
             att_empty.display_name.endswith(" A"),
             "The attendance without a Time Type should keep its default trailing 'A'."
         )
+
+    def test_export_work_entries_employee_versions(self):
+        export = self.env['hr.export.work.entries'].create({
+            'reference_year': 2024,
+            'reference_month': '6',
+        })
+        amendment = self.richard_emp.create_version({'date_version': date(2024, 6, 15)})
+        employee_line = self.env['hr.export.work.entries.employee'].create({
+            'export_id': export.id,
+            'employee_id': self.richard_emp.id,
+        })
+        self.assertIn(amendment, employee_line.version_ids)
+        self.assertIn(self.richard_emp._get_version(date(2024, 6, 1)), employee_line.version_ids)
